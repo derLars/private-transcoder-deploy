@@ -9,6 +9,14 @@ A lightweight FastAPI-based video transcoding server designed to run in an LXC c
 - **Real-time Progress**: Tracks FPS and frames processed.
 - **Automatic Deployment**: Self-contained installation script for LXC containers (Debian/Ubuntu recommended).
 
+## System Requirements
+
+- **CPU**: Transcoding is computationally expensive. Allocate as many cores as possible. 4+ cores recommended for reasonable 1080p HEVC speeds.
+- **RAM**: FFmpeg is memory efficient. **2GB - 4GB** is sufficient for most transcoding tasks.
+- **Storage**:
+    -   **Container**: 8GB is sufficient for the OS and dependencies.
+    -   **Media**: Ensure your media folders (e.g., `/mnt/media`) are mounted into the container with read/write permissions.
+
 ## Installation
 
 Run the following command on your LXC container (must be run as root):
