@@ -21,6 +21,10 @@ apt-get install -y git python3 python3-pip ffmpeg
 echo "Installing Python libraries..."
 pip3 install fastapi uvicorn --break-system-packages || pip3 install fastapi uvicorn
 
+# Stop service before updating to ensure clean state
+echo "Stopping existing service (if any)..."
+systemctl stop "${SERVICE_NAME}" || true
+
 # Clone or Update Repository
 if [ ! -d "$INSTALL_DIR" ]; then
     echo "Fresh installation..."

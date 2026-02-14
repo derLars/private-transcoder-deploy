@@ -1,0 +1,6 @@
+# Ensure shell scripts have LF line endings
+*.sh text eol=lf
+# Ensure python scripts have LF line endings (optional but good practice)
+*.py text eol=lf
+# Ensure other text files have LF line endings (optional)
+*.md text eol=lf
