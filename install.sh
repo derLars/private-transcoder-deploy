@@ -44,7 +44,7 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=${INSTALL_DIR}
-ExecStart=/usr/bin/python3 -m uvicorn transcode:app --host 0.0.0.0 --port 8000
+ExecStart=/usr/bin/python3 -m uvicorn transcode:app --host 0.0.0.0 --port 9009
 Restart=always
 RestartSec=5
 

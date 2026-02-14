@@ -32,7 +32,7 @@ This script will:
 
 ## API Usage
 
-The server listens on port **8000** by default.
+The server listens on port **9009** by default.
 
 ### 1. Start Transcoding
 **Endpoint:** `GET /transcode`
@@ -43,7 +43,7 @@ The server listens on port **8000** by default.
 
 **Example:**
 ```bash
-curl "http://<container-ip>:8000/transcode?input=/mnt/media/movie.mp4&output=/mnt/media/movie.mkv"
+curl "http://<container-ip>:9009/transcode?input=/mnt/media/movie.mp4&output=/mnt/media/movie.mkv"
 ```
 
 ### 2. Check Status
@@ -69,6 +69,30 @@ Returns the current job status, including progress.
 
 Returns the result of the last completed job.
 
-## manual Update
+## Manual Update
 
 To update the server, simply run the installation script again. It will detect the existing installation and pull the latest changes from the repository only if needed.
+
+## Service Management & Logs
+
+You can manage the service using standard `systemctl` commands:
+
+- **Check Service Status**:
+    ```bash
+    systemctl status transcode
+    ```
+
+- **View Real-time Logs**:
+    ```bash
+    journalctl -u transcode -f
+    ```
+
+- **Restart Service**:
+    ```bash
+    systemctl restart transcode
+    ```
+
+- **Stop Service**:
+    ```bash
+    systemctl stop transcode
+    ```

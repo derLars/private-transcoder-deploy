@@ -298,7 +298,7 @@ def get_previous():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Transcoding FastAPI Server")
-    parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
+    parser.add_argument("--port", type=int, default=9009, help="Port to listen on")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to listen on")
     args = parser.parse_args()
     
