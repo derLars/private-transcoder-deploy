@@ -160,7 +160,7 @@ def run_transcode(input_path, output_path):
         # 4. Construct FFmpeg Command
         ffmpeg_cmd = [
             'ffmpeg',
-            '-y',
+            '-n',
             '-i', input_path,
             '-map_metadata', '0',
             '-map', '0:v:0',
@@ -183,7 +183,7 @@ def run_transcode(input_path, output_path):
 
         ffmpeg_cmd.extend([
             '-c:v', 'libx265',
-            '-preset', 'slow',
+            '-preset', 'medium',
             '-tag:v', 'hvc1',
             '-pix_fmt', 'yuv420p10le',
             '-vf', 'scale=-2:1080',
