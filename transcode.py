@@ -5,10 +5,15 @@ import argparse
 import sys
 import threading
 import time
+import logging
 from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Transcoding Server")
 
@@ -79,8 +84,19 @@ def get_video_duration_frames(input_path):
         print(f"Error probing for frame count: {e}")
         return 0, 0
 
+def stderr_reader(process):
+    """Read stderr in a separate thread to prevent blocking."""
+    try:
+        for line in process.stderr:
+            if line:
+                logger.warning(f"FFmpeg: {line.rstrip()}")
+    except Exception as e:
+        logger.error(f"Error reading stderr: {e}")
+
 def run_transcode(input_path, output_path):
     global CURRENT_JOB, PREVIOUS_JOB
+    
+    logger.info(f"Starting transcode job: {input_path} -> {output_path}")
     
     # Update status to starting
     with JOB_LOCK:
@@ -92,7 +108,7 @@ def run_transcode(input_path, output_path):
         base, ext = os.path.splitext(output_path)
         if ext.lower() != '.mkv':
             output_path = base + '.mkv'
-            print(f"Enforcing MKV container. Output file changed to: {output_path}")
+            logger.info(f"Enforcing MKV container. Output file changed to: {output_path}")
             with JOB_LOCK:
                 if CURRENT_JOB:
                     CURRENT_JOB['output'] = output_path
@@ -101,18 +117,24 @@ def run_transcode(input_path, output_path):
         if not os.path.exists(input_path):
             raise FileNotFoundError(f"Input file not found: {input_path}")
 
+        logger.info(f"Input file validated: {input_path}")
+
         # 1b. Ensure output directory exists
         output_dir = os.path.dirname(output_path)
         if output_dir and not os.path.exists(output_dir):
             os.makedirs(output_dir, exist_ok=True)
+            logger.info(f"Created output directory: {output_dir}")
 
         # Get total frames for progress
+        logger.info("Probing video for frame count...")
         _, total_frames = get_video_duration_frames(input_path)
         with JOB_LOCK:
             if CURRENT_JOB:
                 CURRENT_JOB['total_frames'] = total_frames
+        logger.info(f"Total frames: {total_frames}")
 
         # 2. Probe the file using ffprobe (original logic)
+        logger.info("Analyzing video streams...")
         probe_cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', input_path]
         result = subprocess.run(probe_cmd, capture_output=True, text=True, check=True)
         media_info = json.loads(result.stdout)
@@ -167,19 +189,28 @@ def run_transcode(input_path, output_path):
             output_path
         ])
 
-        print(f"Transcoding {input_path} to {output_path}...")
+        logger.info(f"Starting FFmpeg transcode: {input_path} -> {output_path}")
+        logger.info(f"FFmpeg command: {' '.join(ffmpeg_cmd)}")
         
         # Start FFmpeg process
         with JOB_LOCK:
             if CURRENT_JOB:
                 CURRENT_JOB['status'] = 'transcoding'
-            
+        
+        logger.info("Launching FFmpeg process...")
         process = subprocess.Popen(
             ffmpeg_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             universal_newlines=True
         )
+        
+        logger.info(f"FFmpeg process started (PID: {process.pid})")
+
+        # Start stderr reader thread to prevent blocking
+        stderr_thread = threading.Thread(target=stderr_reader, args=(process,))
+        stderr_thread.daemon = True
+        stderr_thread.start()
 
         # Read progress from stdout (because of -progress -)
         while True:
@@ -214,10 +245,11 @@ def run_transcode(input_path, output_path):
                                 break
 
         process.wait()
+        logger.info(f"FFmpeg process completed with return code: {process.returncode}")
         
         if process.returncode != 0:
-            stderr_output = process.stderr.read()
-            raise subprocess.CalledProcessError(process.returncode, ffmpeg_cmd, output=None, stderr=stderr_output)
+            # stderr already consumed by stderr_thread, so just raise the error
+            raise subprocess.CalledProcessError(process.returncode, ffmpeg_cmd)
 
         # Success
         with JOB_LOCK:
@@ -229,10 +261,10 @@ def run_transcode(input_path, output_path):
             }
             CURRENT_JOB = None
             
-        print(f"Finished transcoding: {output_path}")
+        logger.info(f"Transcoding completed successfully: {output_path}")
 
     except Exception as e:
-        print(f"Transcoding failed: {e}")
+        logger.error(f"Transcoding failed: {e}", exc_info=True)
         with JOB_LOCK:
             PREVIOUS_JOB = {
                 'input': input_path,
