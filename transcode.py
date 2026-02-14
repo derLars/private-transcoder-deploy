@@ -5,8 +5,11 @@ import argparse
 import sys
 import threading
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from urllib.parse import urlparse, parse_qs
+from fastapi import FastAPI, HTTPException, Response, status
+from fastapi.responses import JSONResponse
+import uvicorn
+
+app = FastAPI(title="Transcoding Server")
 
 # Global State
 CURRENT_JOB = None
@@ -76,7 +79,8 @@ def run_transcode(input_path, output_path):
     
     # Update status to starting
     with JOB_LOCK:
-        CURRENT_JOB['status'] = 'analyzing'
+        if CURRENT_JOB:
+            CURRENT_JOB['status'] = 'analyzing'
         
     try:
         # 0. Enforce MKV extension
@@ -85,7 +89,8 @@ def run_transcode(input_path, output_path):
             output_path = base + '.mkv'
             print(f"Enforcing MKV container. Output file changed to: {output_path}")
             with JOB_LOCK:
-                CURRENT_JOB['output'] = output_path
+                if CURRENT_JOB:
+                    CURRENT_JOB['output'] = output_path
 
         # 1. Validation
         if not os.path.exists(input_path):
@@ -99,7 +104,8 @@ def run_transcode(input_path, output_path):
         # Get total frames for progress
         _, total_frames = get_video_duration_frames(input_path)
         with JOB_LOCK:
-            CURRENT_JOB['total_frames'] = total_frames
+            if CURRENT_JOB:
+                CURRENT_JOB['total_frames'] = total_frames
 
         # 2. Probe the file using ffprobe (original logic)
         probe_cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', input_path]
@@ -160,7 +166,8 @@ def run_transcode(input_path, output_path):
         
         # Start FFmpeg process
         with JOB_LOCK:
-            CURRENT_JOB['status'] = 'transcoding'
+            if CURRENT_JOB:
+                CURRENT_JOB['status'] = 'transcoding'
             
         process = subprocess.Popen(
             ffmpeg_cmd,
@@ -186,19 +193,20 @@ def run_transcode(input_path, output_path):
                 value = value.strip()
                 
                 with JOB_LOCK:
-                    if key == 'frame':
-                        try:
-                            CURRENT_JOB['frames_processed'] = int(value)
-                        except ValueError:
-                            pass
-                    elif key == 'fps':
-                        try:
-                            CURRENT_JOB['fps'] = float(value)
-                        except ValueError:
-                            pass
-                    elif key == 'progress':
-                        if value == 'end':
-                            break
+                    if CURRENT_JOB:
+                        if key == 'frame':
+                            try:
+                                CURRENT_JOB['frames_processed'] = int(value)
+                            except ValueError:
+                                pass
+                        elif key == 'fps':
+                            try:
+                                CURRENT_JOB['fps'] = float(value)
+                            except ValueError:
+                                pass
+                        elif key == 'progress':
+                            if value == 'end':
+                                break
 
         process.wait()
         
@@ -230,111 +238,68 @@ def run_transcode(input_path, output_path):
             }
             CURRENT_JOB = None
 
-class TranscodeHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        parsed_url = urlparse(self.path)
-        path = parsed_url.path
-        query_params = parse_qs(parsed_url.query)
+@app.get("/transcode", status_code=status.HTTP_202_ACCEPTED)
+def start_transcode(input: str, output: str):
+    global CURRENT_JOB
+    
+    if not input or not output:
+        raise HTTPException(status_code=400, detail="Missing input or output parameters")
 
-        if path == '/transcode':
-            self.handle_transcode(query_params)
-        elif path == '/status':
-            self.handle_status()
-        elif path == '/previous':
-            self.handle_previous()
-        else:
-            self.send_error(404, "Not Found")
-
-    def handle_transcode(self, params):
-        global CURRENT_JOB
+    with JOB_LOCK:
+        if CURRENT_JOB is not None:
+            raise HTTPException(status_code=409, detail="Server is busy with another transcoding request")
         
-        input_file = params.get('input', [None])[0]
-        output_file = params.get('output', [None])[0]
+        # Initialize job
+        CURRENT_JOB = {
+            'input': input,
+            'output': output,
+            'status': 'starting',
+            'fps': 0.0,
+            'frames_processed': 0,
+            'total_frames': 0
+        }
 
-        if not input_file or not output_file:
-            self.send_response(400)
-            self.end_headers()
-            self.wfile.write(b"Missing input or output parameters")
-            return
+    # Start thread
+    thread = threading.Thread(target=run_transcode, args=(input, output))
+    thread.daemon = True
+    thread.start()
 
-        with JOB_LOCK:
-            if CURRENT_JOB is not None:
-                self.send_response(409) # Conflict
-                self.end_headers()
-                self.wfile.write(b"Server is busy with another transcoding request")
-                return
-            
-            # Initialize job
-            CURRENT_JOB = {
-                'input': input_file,
-                'output': output_file,
-                'status': 'starting',
-                'fps': 0.0,
-                'frames_processed': 0,
-                'total_frames': 0
+    return {"message": "Transcoding started"}
+
+@app.get("/status")
+def get_status():
+    with JOB_LOCK:
+        if CURRENT_JOB:
+            return {
+                'busy': True,
+                'input': CURRENT_JOB['input'],
+                'output': CURRENT_JOB['output'],
+                'fps': CURRENT_JOB['fps'],
+                'frames_processed': CURRENT_JOB['frames_processed'],
+                'total_frames': CURRENT_JOB['total_frames'],
+                'status': CURRENT_JOB['status']
+            }
+        else:
+            return {
+                'busy': False,
+                'status': 'idle'
             }
 
-        # Start thread
-        thread = threading.Thread(target=run_transcode, args=(input_file, output_file))
-        thread.daemon = True
-        thread.start()
-
-        self.send_response(202) # Accepted
-        self.end_headers()
-        self.wfile.write(b"Transcoding started")
-
-    def handle_status(self):
-        with JOB_LOCK:
-            if CURRENT_JOB:
-                response = {
-                    'busy': True,
-                    'input': CURRENT_JOB['input'],
-                    'output': CURRENT_JOB['output'],
-                    'fps': CURRENT_JOB['fps'],
-                    'frames_processed': CURRENT_JOB['frames_processed'],
-                    'total_frames': CURRENT_JOB['total_frames'],
-                    'status': CURRENT_JOB['status']
-                }
-            else:
-                response = {
-                    'busy': False,
-                    'status': 'idle'
-                }
-        
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-        self.wfile.write(json.dumps(response).encode('utf-8'))
-
-    def handle_previous(self):
-        with JOB_LOCK:
-            if PREVIOUS_JOB:
-                response = PREVIOUS_JOB
-            else:
-                response = {
-                    'status': 'none',
-                    'message': 'No previous jobs recorded'
-                }
-        
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-        self.wfile.write(json.dumps(response).encode('utf-8'))
-
-def run_server(port=8000):
-    server_address = ('', port)
-    httpd = HTTPServer(server_address, TranscodeHandler)
-    print(f"Starting server on port {port}...")
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    httpd.server_close()
-    print("Server stopped.")
+@app.get("/previous")
+def get_previous():
+    with JOB_LOCK:
+        if PREVIOUS_JOB:
+            return PREVIOUS_JOB
+        else:
+            return {
+                'status': 'none',
+                'message': 'No previous jobs recorded'
+            }
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Transcoding HTTP Server")
+    parser = argparse.ArgumentParser(description="Transcoding FastAPI Server")
     parser.add_argument("--port", type=int, default=8000, help="Port to listen on")
+    parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to listen on")
     args = parser.parse_args()
     
-    run_server(args.port)
+    uvicorn.run(app, host=args.host, port=args.port)
