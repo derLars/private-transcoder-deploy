@@ -35,16 +35,37 @@ This script will:
 The server listens on port **9009** by default.
 
 ### 1. Start Transcoding
-**Endpoint:** `GET /transcode`
 
+You can use either **GET** or **POST** (recommended).
+
+**Option A: POST (Recommended for complex paths)**
+**Endpoint:** `POST /transcode`
+**Body (JSON):**
+```json
+{
+  "input": "/mnt/media/movie.mp4",
+  "output": "/mnt/media/movie.mkv"
+}
+```
+
+**Example:**
+```bash
+curl -X POST "http://<container-ip>:9009/transcode" \
+     -H "Content-Type: application/json" \
+     -d '{"input": "/mnt/media/movie.mp4", "output": "/mnt/media/movie.mkv"}'
+```
+
+**Option B: GET (Query Parameters)**
+**Endpoint:** `GET /transcode`
 **Parameters:**
 - `input`: Absolute path to the source file.
 - `output`: Absolute path to the destination file.
 
 **Example:**
 ```bash
-curl "http://<container-ip>:9009/transcode?input=/mnt/media/movie.mp4&output=/mnt/media/movie.mkv"
+curl -g "http://<container-ip>:9009/transcode?input=/mnt/media/movie.mp4&output=/mnt/media/movie.mkv"
 ```
+*Note: Use `-g` with curl if your filenames contain square brackets `[]`.*
 
 ### 2. Check Status
 **Endpoint:** `GET /status`

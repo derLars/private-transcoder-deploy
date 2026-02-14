@@ -7,6 +7,7 @@ import threading
 import time
 from fastapi import FastAPI, HTTPException, Response, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 import uvicorn
 
 app = FastAPI(title="Transcoding Server")
@@ -15,6 +16,10 @@ app = FastAPI(title="Transcoding Server")
 CURRENT_JOB = None
 PREVIOUS_JOB = None
 JOB_LOCK = threading.Lock()
+
+class TranscodeRequest(BaseModel):
+    input: str
+    output: str
 
 def get_video_duration_frames(input_path):
     """
@@ -238,12 +243,19 @@ def run_transcode(input_path, output_path):
             }
             CURRENT_JOB = None
 
-@app.get("/transcode", status_code=status.HTTP_202_ACCEPTED)
-def start_transcode(input: str, output: str):
+def start_job(input_path: str, output_path: str):
     global CURRENT_JOB
     
-    if not input or not output:
+    # Strip quotes if present
+    input_path = input_path.strip("'").strip('"')
+    output_path = output_path.strip("'").strip('"')
+
+    if not input_path or not output_path:
         raise HTTPException(status_code=400, detail="Missing input or output parameters")
+        
+    # Validation check before starting thread to give immediate feedback
+    if not os.path.exists(input_path):
+        raise HTTPException(status_code=400, detail=f"Input file not found: {input_path}")
 
     with JOB_LOCK:
         if CURRENT_JOB is not None:
@@ -251,8 +263,8 @@ def start_transcode(input: str, output: str):
         
         # Initialize job
         CURRENT_JOB = {
-            'input': input,
-            'output': output,
+            'input': input_path,
+            'output': output_path,
             'status': 'starting',
             'fps': 0.0,
             'frames_processed': 0,
@@ -260,11 +272,19 @@ def start_transcode(input: str, output: str):
         }
 
     # Start thread
-    thread = threading.Thread(target=run_transcode, args=(input, output))
+    thread = threading.Thread(target=run_transcode, args=(input_path, output_path))
     thread.daemon = True
     thread.start()
 
     return {"message": "Transcoding started"}
+
+@app.get("/transcode", status_code=status.HTTP_202_ACCEPTED)
+def start_transcode_get(input: str, output: str):
+    return start_job(input, output)
+
+@app.post("/transcode", status_code=status.HTTP_202_ACCEPTED)
+def start_transcode_post(request: TranscodeRequest):
+    return start_job(request.input, request.output)
 
 @app.get("/status")
 def get_status():
