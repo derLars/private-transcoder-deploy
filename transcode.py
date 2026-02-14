@@ -35,8 +35,7 @@ def get_video_duration_frames(input_path):
         'ffprobe', 
         '-v', 'error', 
         '-select_streams', 'v:0', 
-        '-count_packets', 
-        '-show_entries', 'stream=nb_read_packets,r_frame_rate,duration', 
+        '-show_entries', 'stream=r_frame_rate,duration,nb_frames', 
         '-of', 'json', 
         input_path
     ]
@@ -45,20 +44,11 @@ def get_video_duration_frames(input_path):
         data = json.loads(result.stdout)
         streams = data.get('streams', [])
         if not streams:
+            logger.warning("No video streams found")
             return 0, 0
             
         stream = streams[0]
         
-        # Try to get frame count directly
-        nb_frames = stream.get('nb_read_packets')
-        if nb_frames:
-            try:
-                total_frames = int(nb_frames)
-            except ValueError:
-                total_frames = 0
-        else:
-            total_frames = 0
-            
         # Get duration
         duration = stream.get('duration')
         if duration:
@@ -69,19 +59,33 @@ def get_video_duration_frames(input_path):
         else:
             duration_sec = 0.0
 
-        # Fallback calculation if frames missing but duration and fps exist
+        # Try to get frame count from metadata (fast, but not always present)
+        nb_frames = stream.get('nb_frames')
+        total_frames = 0
+        if nb_frames:
+            try:
+                total_frames = int(nb_frames)
+                logger.info(f"Frame count from metadata: {total_frames}")
+            except ValueError:
+                pass
+
+        # Calculate from duration * fps if not available
         if total_frames == 0 and duration_sec > 0:
             r_frame_rate = stream.get('r_frame_rate', '')
             if '/' in r_frame_rate:
-                num, den = map(int, r_frame_rate.split('/'))
-                if den > 0:
-                    fps = num / den
-                    total_frames = int(duration_sec * fps)
+                try:
+                    num, den = map(int, r_frame_rate.split('/'))
+                    if den > 0:
+                        fps = num / den
+                        total_frames = int(duration_sec * fps)
+                        logger.info(f"Frame count calculated: {total_frames} (duration: {duration_sec}s, fps: {fps})")
+                except ValueError:
+                    logger.warning("Could not parse frame rate")
             
         return duration_sec, total_frames
         
     except Exception as e:
-        print(f"Error probing for frame count: {e}")
+        logger.error(f"Error probing for frame count: {e}")
         return 0, 0
 
 def stderr_reader(process):
